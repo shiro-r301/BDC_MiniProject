@@ -11,13 +11,13 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-
+import pprint
 import pyarrow as pa
 import pyarrow.parquet as pq
 import requests
-
-from config import BBox
-from tokens import NoAvailableAccount, TokenManager
+from kafka_setup.prod.producer import publish_event
+from collector.config import BBox
+from collector.tokens import NoAvailableAccount, TokenManager
 
 log = logging.getLogger(__name__)
 
@@ -181,6 +181,7 @@ class Worker:
 
         r.raise_for_status()
         self._last_remaining = r.headers.get("X-Rate-Limit-Remaining", "?")
+        publish_event(r.json())
         return r.json()
 
     def _poll_once(self):

@@ -6,9 +6,9 @@ import threading
 
 from dotenv import load_dotenv
 
-from config import ConfigError, budget_report, load_config
-from tokens import TokenManager
-from worker import Worker
+from collector.config import ConfigError, budget_report, load_config
+from collector.tokens import TokenManager
+from collector.worker import Worker
 
 
 def main() -> int:

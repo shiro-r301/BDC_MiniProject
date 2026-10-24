@@ -1,0 +1,18 @@
+groups:
+  - name: kafka
+    rules:
+      - alert: KafkaUnderReplicatedPartitions
+        expr: kafka_server_replicamanager_underreplicatedpartitions > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka has under-replicated partitions"
+
+      - alert: KafkaConsumerLagHigh
+        expr: max(kafka_consumergroup_lag) > 10000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consumer lag above 10,000 messages for 5 minutes"
