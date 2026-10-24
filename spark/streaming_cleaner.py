@@ -1,6 +1,9 @@
 """Consume raw flight JSON from Kafka and archive cleaned fixes as Parquet."""
 import logging
-import os
+import os, sys
+print("SPARK PYTHON EXECUTABLE:", sys.executable, flush=True)
+print("SPARK PYTHON VERSION:", sys.version, flush=True)
+
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -213,6 +216,7 @@ def main() -> None:
         .appName("FlightTracking-KafkaCleaner")
         .config("spark.jars.packages", config.kafka_package)
         .config("spark.sql.session.timeZone", "UTC")
+        .config("spark.sql.shuffle.partitions", "8")
     )
     spark = builder.getOrCreate()
     try:
