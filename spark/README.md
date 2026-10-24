@@ -2,16 +2,30 @@
 
 This directory contains the batch and Structured Streaming cleaners for the flight-tracking
 project. The streaming path consumes the collector's Kafka topic, validates and deduplicates
-flight fixes, adds projected coordinates, and archives the result as Parquet.
+flight fixes, adds projected coordinates, applies a per-aircraft Kalman filter, and archives
+the result as Parquet. A local bridge publishes the cleaned positions to the flight-tracker
+frontend over WebSocket.
+
+## Current Run Status (2026-10-25)
+
+- Kafka's local Docker stack was running and `api_events` existed at the last check.
+- The Spark streaming query has **not** been started in the current run.
+- The frontend and WebSocket bridge are stopped; start them with the commands below.
+- The existing `Data/cleaned-stream` files predate the Kalman columns. They are legacy raw
+  cleaned rows, not Kalman output. The new defaults below use separate output and checkpoint
+  paths so the old files/state are left untouched.
+- Python filter checks, the bridge's synthetic Parquet mapping, and a frontend build/typecheck
+  passed before the latest status-text edit. The current files have clean editor diagnostics,
+  but a live Kafka-to-Spark-to-frontend run is still unverified.
 
 ```text
-OpenSky -> collector -> Kafka: api_events -> Spark Structured Streaming -> Parquet
-                                                                    -> frontend: not connected
+OpenSky -> collector -> Kafka: api_events -> Spark validation/projection/Kalman -> Parquet
+                                                                  -> WebSocket bridge -> frontend
 ```
 
-The frontend currently receives live data from a separate WebSocket endpoint. It does not
-read Kafka or these Parquet files directly. See `../flight-tracker/docs/API_CONTRACT.md` for
-the frontend event shape.
+The frontend does not read Kafka or Parquet directly. `flight_ws_bridge.py` reads committed
+Spark Parquet files and serves the frontend's WebSocket contract. See
+`../flight-tracker/docs/API_CONTRACT.md` for the frontend event shape.
 
 ## Kafka Handoff
 
@@ -104,9 +118,8 @@ For a non-local or managed Kafka cluster, provide the project owner with:
   `org.apache.spark:spark-sql-kafka-0-10_2.13:4.2.0`.
 - Java **17, 21, or 25** for Spark 4.2.0. Use the same supported Spark/Python environment for
   the driver and workers.
-- Python packages: install the root `requirements.txt`, then install `pyspark==4.2.0` and
-  `confluent-kafka` if they are not already installed. The root requirements file currently
-  does not include those two packages.
+- Python packages: `python -m pip install -r requirements.txt` installs the Spark, collector,
+  Parquet, and WebSocket bridge dependencies.
 - Internet access on the first Spark launch may be required for Ivy/Maven to download the
   Kafka connector specified by `spark.jars.packages`.
 - A running Kafka broker and an OpenSky account/configuration for the collector.
@@ -150,41 +163,82 @@ collector; both are long-running processes.
    KAFKA_STARTING_OFFSETS=earliest
    KAFKA_SECURITY_PROTOCOL=PLAINTEXT
    SPARK_KAFKA_PACKAGE=org.apache.spark:spark-sql-kafka-0-10_2.13:4.2.0
-   PROJECTION_REFERENCE_LATITUDE=19.0
-   PROJECTION_REFERENCE_LONGITUDE=76.0
+  PROJECTION_REFERENCE_LATITUDE=46.477
+  PROJECTION_REFERENCE_LONGITUDE=6.425
+  CLEANER_OUTPUT_PATH=Data/cleaned-kalman-stream
+  SPARK_CHECKPOINT_PATH=Data/checkpoints/flight-cleaner-kalman
    ```
 
    Configure the collector's `OPENSKY_ACCOUNTS` (or legacy client ID/secret) and `BBOXES`
    in the same `.env`; the supplied example contains placeholders/sample settings.
 
-4. Start Spark:
+4. Start Spark in a terminal:
 
    ```sh
-   spark-submit spark/streaming_cleaner.py
+  spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.2.0 \
+    spark/streaming_cleaner.py
    ```
 
-5. In another terminal, start the collector:
+5. In a second terminal, start the collector:
 
    ```sh
    python -m collector.main
    ```
 
-The collector also writes its own raw Parquet output. Spark's cleaned output is separate and
-appears under `Data/cleaned-stream/date=YYYY-MM-DD/hour=HH/` after records arrive and a
-micro-batch completes. No output file is expected while the topic is empty.
+6. In a third terminal, start the Parquet-to-WebSocket bridge:
+
+  ```sh
+  python -m spark.flight_ws_bridge
+  ```
+
+  It listens at `ws://127.0.0.1:8765/ws/flights`. For each newly committed Parquet row,
+  its terminal prints a `[Kalman UPDATED]` line showing the raw fix, map position, and
+  adjustment in meters. The initial archive scan is quiet; subsequent stream output is
+  printed as it arrives.
+
+7. Configure and run the frontend in another terminal:
+
+  ```sh
+  cd flight-tracker
+  cp .env.example .env
+  pnpm install
+  pnpm dev
+  ```
+
+  Open the URL printed by Vite. The map markers use the smoothed coordinates; selecting an
+  aircraft shows the raw fix, map position, and whether the Kalman state was updated.
+
+The collector also writes its own raw Parquet output. Spark's Kalman-enabled output is separate
+and appears under `Data/cleaned-kalman-stream/date=YYYY-MM-DD/hour=HH/` after records arrive
+and a micro-batch completes. No output file is expected while the topic is empty.
+
+## Kalman Filter Output
+
+The streaming query groups fixes by `icao24` and processes each aircraft's fixes in
+`time_position` order within a micro-batch. The constant-velocity state tracks projected
+position (`x`, `y`) and velocity (`vx`, `vy`); position observations come from projected
+coordinates, and velocity observations are derived from `velocity` and `true_track` when
+both are available. The current noise assumptions are 75 m position standard deviation,
+8 m/s velocity standard deviation, and 3 m/s^2 acceleration standard deviation.
+
+The raw `x` and `y` columns and raw `latitude`/`longitude` are retained. The output adds
+`smoothed_x`, `smoothed_y`, `smoothed_latitude`, `smoothed_longitude`, and `kalman_updated`.
+A fix older than the last fix already processed for that aircraft is kept with raw coordinates
+in the smoothed columns and `kalman_updated=false`; it does not rewind filter state.
+Per-aircraft state is checkpointed and expires after one hour with no fixes for that aircraft.
 
 ## Verify the Pipeline
 
 - In Kafka UI, inspect the `api_events` topic and confirm new JSON messages arrive.
 - Or run the sample consumer in another terminal: `python -m kafka_setup.prod.consumer`.
 - In Spark logs, confirm it reports consuming `api_events` from the expected bootstrap host.
-- Check for Parquet parts under `Data/cleaned-stream/date=*/hour=*`.
+- Check for Parquet parts under `Data/cleaned-kalman-stream/date=*/hour=*`.
 - A message can be present in Kafka but absent from output if it is malformed, has a null/blank
   `icao24`, null `time_position`, invalid coordinates, or is a duplicate within the watermark.
 
-The frontend does not read Kafka or Parquet directly. To show these flights in the live map,
-an API/WebSocket bridge must transform cleaned rows to the `LiveFlight` event contract and
-send them to the endpoint configured by `VITE_FLIGHT_WS_URL`.
+The bridge maps Spark's `smoothed_latitude` and `smoothed_longitude` into the `latitude` and
+`longitude` fields used by the map. It also sends raw and smoothed coordinates plus the
+`kalmanUpdated` flag so the inspector can compare the observation to the filtered position.
 
 ## Configuration
 
@@ -204,8 +258,11 @@ variables take precedence over values in `.env`.
 | `PROJECTION_REFERENCE_LONGITUDE` | Required | Projection origin longitude in degrees |
 | `CLEANER_WATERMARK_DELAY` | `10 minutes` | Late-arrival window used by streaming deduplication |
 | `SPARK_TRIGGER_INTERVAL` | `5 seconds` | Processing-time micro-batch interval |
-| `CLEANER_OUTPUT_PATH` | `Data/cleaned-stream` | Parquet output root |
-| `SPARK_CHECKPOINT_PATH` | `Data/checkpoints/flight-cleaner` | Offsets and state for query recovery |
+| `CLEANER_OUTPUT_PATH` | `Data/cleaned-kalman-stream` | Kalman-enabled Parquet output root |
+| `SPARK_CHECKPOINT_PATH` | `Data/checkpoints/flight-cleaner-kalman` | Offsets and Kalman state for recovery |
+| `FLIGHT_WS_HOST` | `127.0.0.1` | Interface for the local WebSocket bridge |
+| `FLIGHT_WS_PORT` | `8765` | Port for the local WebSocket bridge |
+| `FLIGHT_WS_POLL_INTERVAL` | `1` | Seconds between committed-Parquet scans |
 
 ## Offsets and Checkpoints
 
@@ -222,10 +279,10 @@ data, not necessarily all historical messages ever produced.
 
 ## Current Limitations
 
-- The live Spark-to-frontend bridge is not implemented.
 - Invalid records are filtered silently; there is no reject/DLQ topic or streaming reject count.
 - On-ground aircraft are retained.
-- The Kalman smoother is not part of this cleaner yet.
+- The filter is causal (it does not revise earlier outputs when later fixes arrive), and its
+  noise assumptions are currently constants in `kalman_filter.py`.
 - The stream has not been verified end to end against a running broker in this repository.
 - The included Compose broker is a single local development node, not a production Kafka
   deployment.

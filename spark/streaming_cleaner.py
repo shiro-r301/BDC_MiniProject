@@ -21,6 +21,11 @@ from pyspark.sql.types import (
     StructType,
 )
 
+if __package__:
+    from .kalman_filter import smooth_flight_positions
+else:
+    from kalman_filter import smooth_flight_positions
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EARTH_RADIUS_METERS = 6_371_000
 log = logging.getLogger("flight_stream_cleaner")
@@ -130,9 +135,11 @@ def load_config() -> StreamingConfig:
         bootstrap_servers=bootstrap_servers,
         security_protocol=security_protocol,
         input_topic=input_topic,
-        output_path=_path_from_env("CLEANER_OUTPUT_PATH", "Data/cleaned-stream"),
+        output_path=_path_from_env(
+            "CLEANER_OUTPUT_PATH", "Data/cleaned-kalman-stream"
+        ),
         checkpoint_path=_path_from_env(
-            "SPARK_CHECKPOINT_PATH", "Data/checkpoints/flight-cleaner"
+            "SPARK_CHECKPOINT_PATH", "Data/checkpoints/flight-cleaner-kalman"
         ),
         reference_latitude=reference_latitude,
         reference_longitude=reference_longitude,
@@ -236,6 +243,30 @@ def main() -> None:
             config.reference_latitude,
             config.reference_longitude,
             config.watermark_delay,
+        )
+        cleaned = smooth_flight_positions(cleaned)
+        reference_latitude_radians = F.radians(
+            F.lit(config.reference_latitude)
+        )
+        cleaned = (
+            cleaned
+            .withColumn(
+                "smoothed_latitude",
+                F.lit(config.reference_latitude)
+                + F.degrees(F.col("smoothed_y") / F.lit(EARTH_RADIUS_METERS)),
+            )
+            .withColumn(
+                "smoothed_longitude",
+                F.lit(config.reference_longitude)
+                + F.degrees(
+                    F.col("smoothed_x")
+                    / (F.lit(EARTH_RADIUS_METERS) * F.cos(reference_latitude_radians))
+                ),
+            )
+        )
+        log.info(
+            "Kalman stage enabled: filtering x/y per icao24; "
+            "output columns=smoothed_x, smoothed_y, smoothed_latitude, smoothed_longitude"
         )
         query = (
             cleaned.writeStream

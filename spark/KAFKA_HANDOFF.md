@@ -4,7 +4,9 @@
 the separate host-side Structured Streaming entry point for the future Kafka feed.
 It reads the raw topic, parses one JSON flight record per Kafka value, applies
 position/key validation and watermark-based duplicate suppression, adds projected
-`x`/`y` coordinates, and archives rows to Parquet under `date=.../hour=...` folders.
+`x`/`y` coordinates, applies a per-aircraft stateful constant-velocity Kalman filter, and
+archives rows to Parquet under `date=.../hour=...` folders. Output retains raw `x`/`y` and
+adds `smoothed_x`, `smoothed_y`, and `kalman_updated`.
 
 ## Producer contract
 

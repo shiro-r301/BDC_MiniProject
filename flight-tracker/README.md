@@ -4,9 +4,21 @@ Responsive aviation command-center frontend for scanning live aircraft and inspe
 
 ## Run
 
-1. Install workspace dependencies, including `maplibre-gl`.
-2. Copy `.env.example` values into your local environment and configure the live WebSocket and REST service.
-3. Start the Vite dev server with the workspace workflow.
+1. Start Kafka, the collector, and Spark's streaming cleaner as described in `../spark/README.md`.
+2. Start the Parquet/WebSocket bridge from the project root:
+	```sh
+	python -m spark.flight_ws_bridge
+	```
+	It serves `ws://127.0.0.1:8765/ws/flights` and prints raw-versus-smoothed Kalman updates
+	for newly committed Spark rows.
+3. Install frontend dependencies, configure the local WebSocket, and start Vite:
+	```sh
+	cp .env.example .env
+	pnpm install
+	pnpm dev
+	```
+	Open the URL printed by Vite. The live map uses Kalman-smoothed positions; the selected
+	flight inspector compares raw and map coordinates.
 
 `VITE_FLIGHT_WS_URL` and `VITE_FLIGHT_API_BASE_URL` are optional at boot; with either absent, the corresponding surface displays a clear disconnected/configuration state. The application does not silently show sample data when a service is unavailable.
 
@@ -25,4 +37,6 @@ The map uses the OpenStreetMap raster tile service and displays OpenStreetMap at
 - `src/pages/history.tsx`: filterable/paginated archive search and journey playback.
 - `docs/API_CONTRACT.md`: proposed backend integration contract. It is a proposal, not an existing service specification.
 
-No backend, database, ingestion or flight-processing algorithms are included.
+The local WebSocket bridge and Spark flight processing live in the repository's `spark/`
+directory; this frontend does not connect to Kafka directly. The REST history API remains
+proposed and is not implemented by the WebSocket bridge.

@@ -3,6 +3,8 @@ export type FlightStatus = 'airborne' | 'landed' | 'scheduled' | 'unknown' | str
 export interface LiveFlight {
   id: string; icao24?: string; callsign?: string; flightNumber?: string; registration?: string;
   aircraftType?: AircraftType; aircraftModel?: string; operator?: string; latitude?: number; longitude?: number;
+  rawLatitude?: number; rawLongitude?: number; smoothedLatitude?: number; smoothedLongitude?: number;
+  smoothedX?: number; smoothedY?: number; kalmanUpdated?: boolean;
   altitude?: number; speed?: number; heading?: number; verticalRate?: number; squawk?: string; origin?: Airport | null;
   destination?: Airport | null; status?: FlightStatus; positionTimestamp?: string; updatedAt?: string;
 }
