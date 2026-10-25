@@ -247,6 +247,7 @@ def main() -> None:
             .trigger(processingTime=config.trigger_interval)
             .start()
         )
+        
         log.info(
             "Consuming topic %s from %s; output=%s",
             config.input_topic,
