@@ -13,7 +13,10 @@ from pyspark.sql.types import (
 	LongType,
 	StructField,
 	StructType,
+	StringType
 )
+
+import json
 
 POSITION_STD_METERS = 75.0
 VELOCITY_STD_METERS_PER_SECOND = 8.0
@@ -23,11 +26,9 @@ STATE_TIMEOUT_MS = 60 * 60 * 1000
 STATE_SCHEMA = StructType(
 	[
 		StructField("last_time_position", LongType(), nullable=False),
-		StructField("state_vector", ArrayType(DoubleType()), nullable=False),
-		StructField("covariance", ArrayType(DoubleType()), nullable=False),
+		StructField("kalman_json", StringType(), nullable=False),
 	]
 )
-
 
 def _as_finite_float(value: object) -> float | None:
 	if value is None or pd.isna(value):
@@ -145,9 +146,10 @@ def _filter_aircraft(
 		"time_position", kind="stable"
 	)
 	if state.exists:
-		last_time_position, stored_vector, stored_covariance = state.get
-		state_vector = np.asarray(stored_vector, dtype=float)
-		covariance = np.asarray(stored_covariance, dtype=float).reshape(4, 4)
+		last_time_position, kalman_json = state.get
+		stored = json.loads(kalman_json)
+		state_vector = np.asarray(stored["x"], dtype=float)
+		covariance = np.asarray(stored["P"], dtype=float).reshape(4, 4)
 	else:
 		last_time_position = None
 		state_vector = None
@@ -203,8 +205,12 @@ def _filter_aircraft(
 	state.update(
 		(
 			last_time_position,
-			state_vector.tolist(),
-			covariance.ravel().tolist(),
+			json.dumps(
+				{
+					"x": state_vector.tolist(),
+					"P": covariance.ravel().tolist(),
+				}
+			),
 		)
 	)
 	state.setTimeoutDuration(STATE_TIMEOUT_MS)
@@ -218,19 +224,20 @@ def _filter_aircraft(
 
 
 def smooth_flight_positions(dataframe: DataFrame) -> DataFrame:
-	"""Add stateful smoothed coordinates, keeping raw x/y for comparison."""
-	output_schema = dataframe.schema.add(
-		StructField("smoothed_x", DoubleType(), nullable=True)
-	).add(
-		StructField("smoothed_y", DoubleType(), nullable=True)
-	).add(
-		StructField("kalman_updated", BooleanType(), nullable=False)
-	)
+    """Add stateful smoothed coordinates, keeping raw x/y for comparison."""
+    output_schema = StructType(
+        list(dataframe.schema.fields)
+        + [
+            StructField("smoothed_x", DoubleType(), nullable=True),
+            StructField("smoothed_y", DoubleType(), nullable=True),
+            StructField("kalman_updated", BooleanType(), nullable=False),
+        ]
+    )
 
-	return dataframe.groupBy("icao24").applyInPandasWithState(
-		_filter_aircraft,
-		outputStructType=output_schema,
-		stateStructType=STATE_SCHEMA,
-		outputMode="Append",
-		timeoutConf=GroupStateTimeout.ProcessingTimeTimeout,
-	)
+    return dataframe.groupBy("icao24").applyInPandasWithState(
+        _filter_aircraft,
+        outputStructType=output_schema,
+        stateStructType=STATE_SCHEMA,
+        outputMode="Append",
+        timeoutConf=GroupStateTimeout.ProcessingTimeTimeout,
+    )
