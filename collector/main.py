@@ -4,7 +4,7 @@ import signal
 import sys
 import threading
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from collector.config import ConfigError, budget_report, load_config
 from collector.tokens import TokenManager
@@ -19,6 +19,9 @@ def main() -> int:
     )
     load_dotenv()
     try:
+        env_path = find_dotenv(usecwd=True)
+        print(f"Loading .env from: {env_path or 'NOT FOUND'}")
+        load_dotenv(env_path)
         cfg = load_config()
     except ConfigError as e:
         print(f"Config error: {e}", file=sys.stderr)

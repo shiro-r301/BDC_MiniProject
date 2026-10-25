@@ -20,6 +20,7 @@ from pyspark.sql.types import (
     StructField,
     StructType,
 )
+from pyspark.sql import Window
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EARTH_RADIUS_METERS = 6_371_000
@@ -70,6 +71,7 @@ class StreamingConfig:
     kafka_package: str
     max_offsets_per_trigger: int | None
     fail_on_data_loss: bool
+    output_topic: str
 
 
 def _required(name: str) -> str:
@@ -125,7 +127,7 @@ def load_config() -> StreamingConfig:
     fail_on_data_loss = os.environ.get("KAFKA_FAIL_ON_DATA_LOSS", "true").strip().lower()
     if fail_on_data_loss not in {"true", "false"}:
         raise ValueError("KAFKA_FAIL_ON_DATA_LOSS must be 'true' or 'false'")
-
+    output_topic=os.environ.get("KAFKA_OUTPUT_TOPIC", "flights_live").strip()
     return StreamingConfig(
         bootstrap_servers=bootstrap_servers,
         security_protocol=security_protocol,
@@ -142,8 +144,54 @@ def load_config() -> StreamingConfig:
         kafka_package=kafka_package,
         max_offsets_per_trigger=max_offsets,
         fail_on_data_loss=fail_on_data_loss == "true",
+        output_topic=output_topic
     )
 
+def to_kafka_payload(batch_df: DataFrame) -> DataFrame:
+    # Keep only the newest fix per aircraft in this micro-batch
+    w = Window.partitionBy("icao24").orderBy(F.col("time_position").desc())
+    latest = batch_df.withColumn("_rn", F.row_number().over(w)).filter("_rn = 1")
+
+    flight = latest.select(
+        F.col("icao24").alias("id"),
+        "icao24", "callsign", "latitude", "longitude",
+        F.col("baro_altitude").alias("altitude"),
+        F.col("velocity").alias("speed"),
+        F.col("true_track").alias("heading"),
+        F.col("vertical_rate").alias("verticalRate"),
+        "squawk",
+        F.date_format(F.from_unixtime("time_position"),
+                      "yyyy-MM-dd'T'HH:mm:ss'Z'").alias("positionTimestamp"),
+        F.date_format(F.current_timestamp(),
+                      "yyyy-MM-dd'T'HH:mm:ss'Z'").alias("updatedAt"),
+    )
+    # to_json omits null fields by default, so partial updates won't overwrite good data
+    return flight.select(
+        F.col("id").alias("key"),
+        F.to_json(F.struct(*flight.columns)).alias("value"),
+    )
+
+def make_batch_handler(config):
+    def handle(batch_df: DataFrame, batch_id: int):
+        batch_df.persist()
+        try:
+            if batch_df.isEmpty():
+                return
+            # 1. Publish to the live topic first
+            (to_kafka_payload(batch_df).write
+                .format("kafka")
+                .option("kafka.bootstrap.servers", config.bootstrap_servers)
+                .option("kafka.security.protocol", config.security_protocol)
+                .option("topic", config.output_topic)
+                .save())
+            # 2. Then archive
+            (batch_df.write
+                .mode("append")
+                .partitionBy("date", "hour")
+                .parquet(str(config.output_path)))
+        finally:
+            batch_df.unpersist()
+    return handle
 
 def clean_kafka_records(
     kafka_records: DataFrame,
@@ -239,11 +287,8 @@ def main() -> None:
         )
         query = (
             cleaned.writeStream
-            .format("parquet")
-            .outputMode("append")
-            .option("path", str(config.output_path))
+            .foreachBatch(make_batch_handler(config))
             .option("checkpointLocation", str(config.checkpoint_path))
-            .partitionBy("date", "hour")
             .trigger(processingTime=config.trigger_interval)
             .start()
         )

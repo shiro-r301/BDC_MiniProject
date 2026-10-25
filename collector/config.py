@@ -73,6 +73,7 @@ def _load_accounts() -> list[tuple[str, str]]:
 
     try:
         items = json.loads(raw)
+        
     except json.JSONDecodeError as e:
         raise ConfigError(f"OPENSKY_ACCOUNTS is not valid JSON: {e}")
     if not isinstance(items, list) or not items:

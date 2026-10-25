@@ -83,7 +83,7 @@ class Worker:
         self.start_delay = start_delay
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        self._session = requests.Session()  # Session is not thread-safe: one per worker
+        self._session = requests.Session()
         self._buf = []
         self._buf_bytes = 0
         self._buf_started = 0.0
@@ -91,7 +91,7 @@ class Worker:
 
     # ------------------------------------------------------------------ loop
     def run(self):
-        if self.stop.wait(self.start_delay):  # stagger workers so they don't fire together
+        if self.stop.wait(self.start_delay): 
             return
         interval = self.bbox.interval
         next_t = time.monotonic()
