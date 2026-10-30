@@ -454,3 +454,81 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     inset: -1px;
   }
 }
+
+/* Responsive polish: stronger hierarchy, calmer surfaces, and clearer controls. */
+:root {
+  color-scheme: light;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection { color: #17333c; background: #f0d58d; }
+button, a, input, select { -webkit-tap-highlight-color: transparent; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+  outline: 2px solid #c4912d;
+  outline-offset: 3px;
+}
+
+/* Keep the live map legible while giving its floating panels a consistent glass surface. */
+.workspace-map > .topbar,
+.live-page .page-intro,
+.live-page .traffic-column .traffic-panel,
+.live-page .setup-callout,
+.live-page .error-callout,
+.live-page .stale-callout {
+  box-shadow: 0 12px 34px #17333c20, 0 2px 6px #17333c0c;
+}
+.live-page .traffic-column .traffic-panel { border-radius: 10px; }
+.live-page .map-frame { background: #dce8e4; }
+.live-page .traffic-column .flight-list { scrollbar-color: #c4d2cc transparent; scrollbar-width: thin; }
+.flight-row, .record-row, .map-history-link, .traffic-toggle, .map-controls button {
+  transition: background-color .16s ease, border-color .16s ease, color .16s ease, transform .16s ease;
+}
+.flight-row:hover, .record-row:hover { background: #edf4ef; }
+.flight-row.selected, .record-row.selected { background: #f5efdF; }
+
+/* Give the archive controls room on narrower screens without squeezing labels. */
+.history-page { max-width: 1720px; }
+.history-records, .journey-column { box-shadow: 0 5px 18px #19343d08; }
+.history-search:focus-within { border-color: #c9a14b; box-shadow: 0 0 0 3px #e2b64b24; }
+.history-filter select:focus-visible, .history-filter input:focus-visible { border-radius: 3px; }
+.record-row { min-height: 64px; }
+.record-row.selected { box-shadow: inset 3px 0 #c4912d; }
+.pagination button, .playback-actions button {
+  transition: background-color .16s ease, color .16s ease, transform .16s ease;
+}
+.pagination button:not(:disabled):hover, .playback-actions button:not(:disabled):hover {
+  color: #17333c;
+  background: #edf2ec;
+  transform: translateY(-1px);
+}
+.pagination button:disabled, .playback-actions button:disabled { opacity: .42; cursor: not-allowed; }
+.journey-map-wrap { background: #dce8e4; }
+
+@media (max-width: 1100px) {
+  .history-layout { grid-template-columns: minmax(0, 1fr); }
+  .journey-column { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, .8fr); }
+  .journey-header, .journey-meta, .journey-column > .details-panel, .journey-column > .query-error { grid-column: 1 / -1; }
+  .journey-map-wrap { min-height: 300px; }
+  .journey-map-wrap .map-frame { height: 100%; min-height: 300px; }
+  .playback-panel { align-self: center; }
+  .history-tools { grid-template-columns: minmax(190px, 1.4fr) repeat(2, minmax(100px, .7fr)) repeat(2, minmax(120px, .8fr)); }
+}
+
+@media (max-width: 720px) {
+  .history-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .history-search { grid-column: 1 / -1; }
+  .journey-column { display: flex; flex-direction: column; }
+  .journey-map-wrap .map-frame { height: 340px; min-height: 300px; }
+  .playback-panel { width: 100%; }
+  .history-intro { align-items: flex-start; }
+  .history-range { padding-top: 7px; white-space: nowrap; }
+}
+
+@media (max-width: 560px) {
+  .record-row { min-height: 62px; }
+  .record-date small { font-size: 7px; }
+  .history-records, .journey-column { border-radius: 8px; }
+}
