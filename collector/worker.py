@@ -136,11 +136,11 @@ class Worker:
     # ----------------------------------------------------------------- fetch
     def _fetch(self) -> dict:
         b = self.bbox
-        params = {
-            "lamin": b.lamin, "lomin": b.lomin,
-            "lamax": b.lamax, "lomax": b.lomax,
-            "extended": 1,
-        }
+        # params = {
+        #     "lamin": b.lamin, "lomin": b.lomin,
+        #     "lamax": b.lamax, "lomax": b.lomax,
+        #     "extended": 1,
+        # }
         rate_limited_accounts = set()
         while True:
             try:
@@ -151,7 +151,7 @@ class Worker:
             for auth_attempt in (1, 2):
                 r = self._session.get(
                     STATES_URL,
-                    params=params,
+                    # params=params,
                     headers={"Authorization": f"Bearer {tok}"},
                     timeout=30,
                 )

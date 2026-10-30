@@ -8,15 +8,12 @@ const defaultStyle = {
   version: 8 as const, sources: { osm: { type:'raster' as const, tiles:['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], tileSize:256, attribution:'© OpenStreetMap contributors' } },
   layers:[{ id:'osm', type:'raster' as const, source:'osm', minzoom:0, maxzoom:19 }],
 };
-function iconMarkup() {
-  return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2.8 20.2 13l8.4 4.5v2.7L18.3 17l.7 8.2 3 1.8v2l-6-1.5-6 1.5v-2l3-1.8.7-8.2L3.4 20.2v-2.7l8.4-4.5L16 2.8Z" fill="currentColor" stroke="white" stroke-width="1.2" stroke-linejoin="round"/></svg>`;
-}
 interface Props { flights: LiveFlight[]; selectedId?: string; onSelect: (id: string) => void; positions?: FlightPosition[]; playbackIndex?: number }
 type AircraftFeatureCollection = {
   type: 'FeatureCollection';
   features: Array<{
     type: 'Feature';
-    properties: { id: string };
+    properties: { id: string; selected: boolean; heading: number };
     geometry: { type: 'Point'; coordinates: [number, number] };
   }>;
 };
@@ -150,6 +147,8 @@ function RasterFallback({
             src={tile.src}
             alt=""
             draggable={false}
+            loading="lazy"
+            decoding="async"
             style={{ left: tile.left, top: tile.top }}
           />
         ))}
@@ -209,11 +208,11 @@ function RasterFallback({
 export default function FlightMap({ flights, selectedId, onSelect, positions, playbackIndex }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const map = useRef<MlMap | null>(null);
-  const markers = useRef<Map<string, Marker>>(new Map());
   const airportMarkers = useRef<Marker[]>([]);
   const [ready, setReady] = useState(false);
   const [mapFailed, setMapFailed] = useState(false);
   const [fallbackView, setFallbackView] = useState<MapView>({ longitude: 8, latitude: 49, zoom: 4 });
+  const selected = flights.find((flight) => flight.id === selectedId);
   useEffect(() => {
     if (!host.current || map.current) return;
     let instance: MlMap;
@@ -224,11 +223,28 @@ export default function FlightMap({ flights, selectedId, onSelect, positions, pl
       return;
     }
     instance.addControl(new maplibregl.NavigationControl({ showCompass:true }), 'top-right');
-    instance.on('load', () => setReady(true));
+    instance.on('load', () => {
+      if (!instance.hasImage('aircraft-icon')) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 64;
+        const context = canvas.getContext('2d');
+        if (context) {
+          context.scale(2, 2);
+          context.fillStyle = '#fff';
+          context.strokeStyle = '#fff';
+          context.lineWidth = 0.7;
+          context.lineJoin = 'round';
+          const aircraft = new Path2D('M16 2.8 20.2 13l8.4 4.5v2.7L18.3 17l.7 8.2 3 1.8v2l-6-1.5-6 1.5v-2l3-1.8.7-8.2L3.4 20.2v-2.7l8.4-4.5L16 2.8Z');
+          context.fill(aircraft);
+          context.stroke(aircraft);
+          instance.addImage('aircraft-icon', context.getImageData(0, 0, canvas.width, canvas.height), { sdf: true, pixelRatio: 2 });
+        }
+      }
+      setReady(true);
+    });
     map.current = instance;
     return () => {
-      markers.current.forEach((m) => m.remove());
-      markers.current.clear();
       airportMarkers.current.forEach((m) => m.remove());
       airportMarkers.current = [];
       instance.remove();
@@ -236,31 +252,8 @@ export default function FlightMap({ flights, selectedId, onSelect, positions, pl
     };
   }, []);
   useEffect(() => {
-    if (!map.current || !ready) return;
-    const current = markers.current;
-    const active = new Set(flights.filter(isPosition).map((f) => f.id));
-    current.forEach((marker, id) => { if (!active.has(id)) { marker.remove(); current.delete(id); } });
-    flights.filter(isPosition).forEach((flight) => {
-      let marker = current.get(flight.id);
-      if (!marker) {
-        const el = document.createElement('button');
-        el.className = 'flight-marker'; el.type = 'button'; el.innerHTML = iconMarkup();
-        el.setAttribute('aria-label', `Select aircraft ${flight.callsign ?? flight.id}`);
-        el.addEventListener('click', () => onSelect(flight.id));
-        marker = new maplibregl.Marker({ element:el, rotationAlignment:'map', pitchAlignment:'map' }).setLngLat([flight.longitude, flight.latitude]).addTo(map.current!);
-        current.set(flight.id, marker);
-      }
-      marker.setLngLat([flight.longitude, flight.latitude]);
-      marker.setRotation(flight.heading ?? 0);
-      marker.getElement().classList.toggle('selected', selectedId === flight.id);
-      marker.getElement().setAttribute('aria-pressed', String(selectedId === flight.id));
-      marker.getElement().style.display = (map.current?.getZoom() ?? 5) < 4.1 && selectedId !== flight.id ? 'none' : '';
-    });
-  }, [flights, selectedId, ready, onSelect]);
-  useEffect(() => {
     airportMarkers.current.forEach((marker)=>marker.remove());
     airportMarkers.current=[];
-    const selected=flights.find((flight)=>flight.id===selectedId);
     if(!map.current||!ready||!selected) return;
     [selected.origin,selected.destination].forEach((airport)=>{
       if(!airport||!Number.isFinite(airport.latitude)||!Number.isFinite(airport.longitude)) return;
@@ -274,40 +267,41 @@ export default function FlightMap({ flights, selectedId, onSelect, positions, pl
       airportMarkers.current.push(new maplibregl.Marker({element,anchor:'center'}).setLngLat([airport.longitude!,airport.latitude!]).addTo(map.current!));
     });
     return ()=>{airportMarkers.current.forEach((marker)=>marker.remove());airportMarkers.current=[];};
-  },[flights,selectedId,ready]);
+  },[ready,selectedId,selected?.origin?.latitude,selected?.origin?.longitude,selected?.origin?.iata,selected?.origin?.icao,selected?.origin?.name,selected?.destination?.latitude,selected?.destination?.longitude,selected?.destination?.iata,selected?.destination?.icao,selected?.destination?.name]);
   useEffect(() => {
     const instance = map.current;
     if (!instance || !ready) return;
     const sourceId = 'aircraft-clusters';
     const data: AircraftFeatureCollection = {
       type:'FeatureCollection',
-      features:flights.filter(isPosition).map((f)=>({type:'Feature',properties:{id:f.id},geometry:{type:'Point',coordinates:[f.longitude,f.latitude]}})),
+      features:flights.filter(isPosition).map((f)=>({type:'Feature',properties:{id:f.id,selected:f.id===selectedId,heading:f.heading??0},geometry:{type:'Point',coordinates:[f.longitude,f.latitude]}})),
     };
     if (!instance.getSource(sourceId)) {
       instance.addSource(sourceId,{type:'geojson',data,cluster:true,clusterMaxZoom:5,clusterRadius:44});
       instance.addLayer({id:'aircraft-cluster-circles',type:'circle',source:sourceId,filter:['has','point_count'],paint:{'circle-color':'#d7ad52','circle-radius':['step',['get','point_count'],14,10,18,30,23],'circle-stroke-color':'#fbfaf1','circle-stroke-width':2,'circle-opacity':0.94}});
       instance.addLayer({id:'aircraft-cluster-count',type:'symbol',source:sourceId,filter:['has','point_count'],layout:{'text-field':['get','point_count_abbreviated'],'text-font':['Open Sans Bold','Arial Unicode MS Bold'],'text-size':11},paint:{'text-color':'#233e44'}});
+      instance.addLayer({id:'aircraft-points',type:'symbol',source:sourceId,filter:['!', ['has','point_count']],layout:{'icon-image':'aircraft-icon','icon-size':['interpolate',['linear'],['zoom'],2,0.42,6,0.7,12,1.05],'icon-rotate':['get','heading'],'icon-rotation-alignment':'map','icon-allow-overlap':true,'icon-ignore-placement':true},paint:{'icon-color':['case',['get','selected'],'#d2a137','#1d5360'],'icon-halo-color':'#f8faf7','icon-halo-width':1.1,'icon-opacity':0.95}});
       instance.on('click','aircraft-cluster-circles',(event)=>{
         const feature=event.features?.[0];
         const clusterId = feature?.properties?.cluster_id;
         if (typeof clusterId !== 'number' || feature?.geometry.type !== 'Point') return;
         instance.easeTo({center:feature.geometry.coordinates as [number,number],zoom:Math.min(instance.getZoom()+2,8)});
       });
+      instance.on('click','aircraft-points',(event)=>{
+        const id=event.features?.[0]?.properties?.id;
+        if(typeof id==='string') onSelect(id);
+      });
       instance.on('mouseenter','aircraft-cluster-circles',()=>{instance.getCanvas().style.cursor='pointer';});
       instance.on('mouseleave','aircraft-cluster-circles',()=>{instance.getCanvas().style.cursor='';});
+      instance.on('mouseenter','aircraft-points',()=>{instance.getCanvas().style.cursor='pointer';});
+      instance.on('mouseleave','aircraft-points',()=>{instance.getCanvas().style.cursor='';});
     } else (instance.getSource(sourceId) as import('maplibre-gl').GeoJSONSource).setData(data);
-    const handleZoom=()=>markers.current.forEach((marker,id)=>{marker.getElement().style.display=instance.getZoom()<4.1&&id!==selectedId?'none':'';});
-    instance.on('zoom',handleZoom);
-    return () => {
-      instance.off('zoom', handleZoom);
-    };
-  },[flights,ready,selectedId]);
+  },[flights,ready,selectedId,onSelect]);
   useEffect(() => {
     const instance = map.current;
     if (!instance || !ready) return;
     const sourceId = 'journey-track';
     const data = positions?.length ? positions.slice(0, playbackIndex === undefined ? positions.length : playbackIndex + 1) : [];
-    const selected=flights.find((flight)=>flight.id===selectedId);
     const coordinates: [number, number][] = data.length
       ? data.map((p): [number, number] => [p.longitude, p.latitude])
       : selected?.origin?.latitude !== undefined &&
@@ -327,8 +321,7 @@ export default function FlightMap({ flights, selectedId, onSelect, positions, pl
       } else (instance.getSource(sourceId) as import('maplibre-gl').GeoJSONSource).setData(feature);
     };
     if (instance.isStyleLoaded()) apply(); else instance.once('load', apply);
-    return () => { if (instance.getLayer('journey-track-line')) instance.removeLayer('journey-track-line'); if (instance.getSource(sourceId)) instance.removeSource(sourceId); };
-  }, [positions, playbackIndex, ready, flights, selectedId]);
+  }, [positions, playbackIndex, ready, selected?.origin?.latitude, selected?.origin?.longitude, selected?.destination?.latitude, selected?.destination?.longitude]);
   const zoom = (amount:number) => {
     if (map.current) map.current.zoomTo((map.current.getZoom() ?? 4) + amount, { duration:250 });
     else setFallbackView((current) => ({ ...current, zoom: Math.max(2, Math.min(18, current.zoom + amount)) }));

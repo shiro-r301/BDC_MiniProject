@@ -1,7 +1,7 @@
 import { config } from './config';
 import { validFlight, type LiveFlight, type ConnectionState } from './types';
 
-type Listener = (event: LiveFlight | { type: 'remove'; id: string } | { type: 'snapshot'; flights: LiveFlight[] }) => void;
+type Listener = (event: LiveFlight | { type: 'remove'; id: string } | { type: 'snapshot'; flights: LiveFlight[] } | { type: 'batch'; flights: LiveFlight[] }) => void;
 type StatusListener = (state: ConnectionState) => void;
 export class FlightSocket {
   private socket?: WebSocket;
@@ -40,10 +40,10 @@ export class FlightSocket {
             this.listeners.forEach((listener) => listener({ type:'snapshot', flights }));
             return;
           }
-          if (Array.isArray(records)) records.forEach((record) => {
-            const flight = record?.flight ?? record;
-            if (validFlight(flight)) this.listeners.forEach((listener) => listener(flight));
-          });
+          if (Array.isArray(records)) {
+            const flights = records.map((record) => record?.flight ?? record).filter(validFlight);
+            if (flights.length) this.listeners.forEach((listener) => listener({ type: 'batch', flights }));
+          }
         } catch { /* Invalid message is ignored; the stream remains available. */ }
       };
       this.socket.onerror = () => this.setState('error');

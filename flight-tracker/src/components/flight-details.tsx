@@ -20,7 +20,7 @@ export function FlightDetails({ flight, onClose }: Props) {
       <Parameter icon={<CircleDot size={15}/>} name="ICAO24" value={display(flight.icao24?.toUpperCase())}/>
     </div>
     <div className="detail-section-title">AIRCRAFT</div>
-    <div className="metadata-list"><div><span>Operator</span><b>{display(flight.operator)}</b></div><div><span>Category</span><b>{display(flight.aircraftType?.replaceAll('-',' '))}</b></div><div><span>Flight number</span><b>{display(flight.flightNumber)}</b></div></div>
+    {/* <div className="metadata-list"><div><span>Operator</span><b>{display(flight.operator)}</b></div><div><span>Category</span><b>{display(flight.aircraftType?.replaceAll('-',' '))}</b></div><div><span>Flight number</span><b>{display(flight.flightNumber)}</b></div></div> */}
     <div className="position-foot"><Clock3 size={13}/><span>POSITION TIME</span><b>{flight.positionTimestamp ? new Date(flight.positionTimestamp).toLocaleTimeString('en-GB',{timeZone:'UTC'})+' UTC' : 'Unavailable'}</b></div>
   </aside>;
 }

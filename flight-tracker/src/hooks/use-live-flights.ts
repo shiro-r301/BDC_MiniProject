@@ -27,22 +27,50 @@ export function useLiveFlights() {
     }
     if (!config.wsUrl) return;
     const socket = new FlightSocket();
-    const unsubscribe = socket.subscribe((event) => {
+    let pending = new Map<string, LiveFlight | null>();
+    let snapshot: LiveFlight[] | null = null;
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
+    const queueFlight = (flight: LiveFlight) => {
+      const previous = pending.get(flight.id);
+      pending.set(flight.id, previous ? { ...previous, ...flight } : flight);
+    };
+    const flush = () => {
+      flushTimer = undefined;
+      const updates = pending;
+      const replacement = snapshot;
+      pending = new Map();
+      snapshot = null;
       setFlights((old) => {
-        const next = new Map(old);
-        if ('type' in event && event.type === 'remove') next.delete(event.id);
-        else if ('type' in event && event.type === 'snapshot') {
-          next.clear();
-          event.flights.forEach((flight)=>next.set(flight.id,flight));
-        }
-        else next.set(event.id, { ...old.get(event.id), ...event });
+        const next = replacement ? new Map(replacement.map((flight) => [flight.id, flight])) : new Map(old);
+        updates.forEach((flight, id) => {
+          if (flight === null) next.delete(id);
+          else next.set(id, { ...next.get(id), ...flight });
+        });
         return next;
       });
       setUpdatedAt(Date.now());
+    };
+    const scheduleFlush = () => {
+      if (flushTimer === undefined) flushTimer = setTimeout(flush, 150);
+    };
+    const unsubscribe = socket.subscribe((event) => {
+      if ('type' in event && event.type === 'snapshot') {
+        snapshot = event.flights;
+        pending.clear();
+      } else if ('type' in event && event.type === 'batch') {
+        event.flights.forEach(queueFlight);
+      } else if ('type' in event && event.type === 'remove') pending.set(event.id, null);
+      else queueFlight(event);
+      scheduleFlush();
     });
     const unsubscribeStatus = socket.onStatus(setState);
     socket.connect();
-    return () => { unsubscribe(); unsubscribeStatus(); socket.disconnect(); };
+    return () => {
+      if (flushTimer !== undefined) clearTimeout(flushTimer);
+      unsubscribe();
+      unsubscribeStatus();
+      socket.disconnect();
+    };
   }, []);
   const list = useMemo(() => [...flights.values()].sort((a,b) => (a.callsign ?? a.id).localeCompare(b.callsign ?? b.id)), [flights]);
   const stale = updatedAt !== null && now - updatedAt > 30_000;
