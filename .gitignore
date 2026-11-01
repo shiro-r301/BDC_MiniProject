@@ -14,3 +14,5 @@ node_modules
 !.vscode/launch.json
 !.vscode/extensions.json
 **/__pycache__/
+
+log4j2-errors.properties

@@ -207,6 +207,14 @@ variables take precedence over values in `.env`.
 | `CLEANER_OUTPUT_PATH` | `Data/cleaned-stream` | Parquet output root |
 | `SPARK_CHECKPOINT_PATH` | `Data/checkpoints/flight-cleaner` | Offsets and state for query recovery |
 
+## Error Logs
+
+The streaming job writes Spark JVM errors to Data/logs/java-errors.log and
+Kalman Python worker tracebacks or fatal Python fault dumps to
+Data/logs/python-worker-errors.log. The Java error log rolls at 10 MB and keeps
+up to five archived files. JVM errors below FATAL are suppressed from the terminal;
+Python's regular application logs remain visible.
+
 ## Offsets and Checkpoints
 
 Keep the checkpoint path between normal restarts. Spark resumes from offsets and state stored

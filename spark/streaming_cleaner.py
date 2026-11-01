@@ -21,6 +21,7 @@ from pyspark.sql.types import (
     StructType,
 )
 from pyspark.sql import Window
+from kalman_filter import smooth_flight_positions
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EARTH_RADIUS_METERS = 6_371_000
@@ -89,6 +90,21 @@ def _path_from_env(name: str, default: str) -> Path:
     return path if path.is_absolute() else PROJECT_ROOT / path
 
 
+def _configure_java_error_dump(spark: SparkSession) -> None:
+    log_dir = PROJECT_ROOT / "Data" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    java_error_path = log_dir / "java-errors.log"
+    config_path = Path(__file__).with_name("log4j2-errors.properties")
+
+    jvm = spark.sparkContext._jvm
+    jvm.java.lang.System.setProperty(
+        "flight.java.errors.path", str(java_error_path.resolve())
+    )
+    jvm.org.apache.logging.log4j.core.config.Configurator.reconfigure(
+        jvm.java.net.URI.create(config_path.resolve().as_uri())
+    )
+
+
 def load_config() -> StreamingConfig:
     load_dotenv(PROJECT_ROOT / ".env")
     bootstrap_servers = _required("KAFKA_BOOTSTRAP_SERVERS")
@@ -147,12 +163,31 @@ def load_config() -> StreamingConfig:
         output_topic=output_topic
     )
 
-def to_kafka_payload(batch_df: DataFrame) -> DataFrame:
+def to_kafka_payload(
+    batch_df: DataFrame,
+    reference_latitude: float,
+    reference_longitude: float,
+) -> DataFrame:
     # Keep only the newest fix per aircraft in this micro-batch
     w = Window.partitionBy("icao24").orderBy(F.col("time_position").desc())
     latest = batch_df.withColumn("_rn", F.row_number().over(w)).filter("_rn = 1")
 
-    flight = latest.select(
+    smoothed = latest.withColumn(
+        "latitude",
+        F.lit(reference_latitude)
+        + F.degrees(F.col("smoothed_y") / F.lit(EARTH_RADIUS_METERS)),
+    ).withColumn(
+        "longitude",
+        F.lit(reference_longitude)
+        + F.degrees(
+            F.col("smoothed_x")
+            / (
+                F.lit(EARTH_RADIUS_METERS)
+                * F.cos(F.radians(F.lit(reference_latitude)))
+            )
+        ),
+    )
+    flight = smoothed.select(
         F.col("icao24").alias("id"),
         "icao24", "callsign", "latitude", "longitude",
         F.col("baro_altitude").alias("altitude"),
@@ -178,7 +213,11 @@ def make_batch_handler(config):
             if batch_df.isEmpty():
                 return
             # 1. Publish to the live topic first
-            (to_kafka_payload(batch_df).write
+            (to_kafka_payload(
+                batch_df,
+                config.reference_latitude,
+                config.reference_longitude,
+            ).write
                 .format("kafka")
                 .option("kafka.bootstrap.servers", config.bootstrap_servers)
                 .option("kafka.security.protocol", config.security_protocol)
@@ -259,14 +298,18 @@ def main() -> None:
     except ValueError as error:
         raise SystemExit(f"Configuration error: {error}") from error
 
+    print("HI")
     builder = (
         SparkSession.builder
         .appName("FlightTracking-KafkaCleaner")
         .config("spark.jars.packages", config.kafka_package)
         .config("spark.sql.session.timeZone", "UTC")
         .config("spark.sql.shuffle.partitions", "8")
+        .config("spark.sql.execution.pyspark.udf.faulthandler.enabled", "true")
+        .config("spark.python.worker.faulthandler.enabled", "true")
     )
     spark = builder.getOrCreate()
+    _configure_java_error_dump(spark)
     try:
         kafka_options = {
             "kafka.bootstrap.servers": config.bootstrap_servers,
@@ -285,8 +328,9 @@ def main() -> None:
             config.reference_longitude,
             config.watermark_delay,
         )
+        kalmaned = smooth_flight_positions(cleaned)
         query = (
-            cleaned.writeStream
+            kalmaned.writeStream
             .foreachBatch(make_batch_handler(config))
             .option("checkpointLocation", str(config.checkpoint_path))
             .trigger(processingTime=config.trigger_interval)
@@ -294,9 +338,10 @@ def main() -> None:
         )
         
         log.info(
-            "Consuming topic %s from %s; output=%s",
+            "Consuming topic %s from %s; live topic=%s; archive=%s",
             config.input_topic,
             config.bootstrap_servers,
+            config.output_topic,
             config.output_path,
         )
         query.awaitTermination()

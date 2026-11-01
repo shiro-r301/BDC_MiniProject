@@ -1,5 +1,11 @@
 """Per-aircraft constant-velocity Kalman smoothing for Spark streams."""
 import math
+import faulthandler
+import os
+import sys
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
 from collections.abc import Iterator
 
 import numpy as np
@@ -22,6 +28,35 @@ POSITION_STD_METERS = 75.0
 VELOCITY_STD_METERS_PER_SECOND = 8.0
 ACCELERATION_STD_METERS_PER_SECOND_SQUARED = 3.0
 STATE_TIMEOUT_MS = 60 * 60 * 1000
+
+_WORKER_ERROR_LOG_PATH = (
+    Path(__file__).resolve().parents[1] / "Data" / "logs" / "python-worker-errors.log"
+)
+_WORKER_FAULT_LOG = None
+
+
+def _enable_worker_diagnostics() -> None:
+    global _WORKER_FAULT_LOG
+    if _WORKER_FAULT_LOG is not None:
+        return
+
+    _WORKER_ERROR_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _WORKER_FAULT_LOG = _WORKER_ERROR_LOG_PATH.open(
+        "a", encoding="utf-8", buffering=1
+    )
+    faulthandler.enable(file=_WORKER_FAULT_LOG, all_threads=True)
+    sys.stderr = _WORKER_FAULT_LOG
+
+
+def _record_worker_exception() -> None:
+    _enable_worker_diagnostics()
+    _WORKER_FAULT_LOG.write(
+        f"\n[{datetime.now(timezone.utc).isoformat()} pid={os.getpid()}] "
+        "Kalman worker callback failed\n"
+    )
+    traceback.print_exc(file=_WORKER_FAULT_LOG)
+    _WORKER_FAULT_LOG.flush()
+
 
 STATE_SCHEMA = StructType(
 	[
@@ -129,7 +164,7 @@ def _update(
 	return updated_state, updated_covariance
 
 
-def _filter_aircraft(
+def _filter_aircraft_impl(
 	key: tuple[object, ...],
 	pdf_iterator: Iterator[pd.DataFrame],
 	state: GroupState,
@@ -221,6 +256,19 @@ def _filter_aircraft(
 	records["smoothed_y"] = smoothed_y
 	records["kalman_updated"] = kalman_updated
 	yield records
+
+
+def _filter_aircraft(
+    key: tuple[object, ...],
+    pdf_iterator: Iterator[pd.DataFrame],
+    state: GroupState,
+) -> Iterator[pd.DataFrame]:
+    _enable_worker_diagnostics()
+    try:
+        yield from _filter_aircraft_impl(key, pdf_iterator, state)
+    except BaseException:
+        _record_worker_exception()
+        raise
 
 
 def smooth_flight_positions(dataframe: DataFrame) -> DataFrame:

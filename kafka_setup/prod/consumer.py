@@ -8,7 +8,7 @@ c = Consumer({
     "enable.auto.commit": True,
 })
 
-c.subscribe(["api_events"])
+c.subscribe(["flights_live"])
 print("Waiting for messages... Ctrl+C to stop")
 
 try:
@@ -21,8 +21,8 @@ try:
             continue
 
         print(f"partition={msg.partition()} offset={msg.offset()} "
-              f"key={msg.key().decode()} "
-              f"id={json.loads(msg.value())['icao24']}"
-              f"id={json.loads(msg.value())['time_position']}")
+            #   f"key={msg.key().decode()} "
+            #   f"id={json.loads(msg.value())['icao24']}"
+              f"id={json.loads(msg.value()).keys()}")
 finally:
     c.close()
